@@ -1,0 +1,77 @@
+name: Build Scriba Pitch
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+          - name: macOS
+            os: macos-14
+
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ARA2 SDK (instant reading of the track in ARA DAWs)
+      - name: Get ARA SDK
+        shell: bash
+        run: |
+          if [ ! -f ARA_SDK/ARA_API/ARAInterface.h ]; then
+            rm -rf ARA_SDK
+            git clone --depth 1 --recursive --branch releases/2.2.0 https://github.com/Celemony/ARA_SDK.git ARA_SDK
+          fi
+
+      # No fixed generator name: CMake picks whatever Visual Studio the runner
+      # has (GitHub updates windows-latest to newer versions over time).
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -B build -A x64
+
+      - name: Configure (macOS, Apple Silicon + Intel)
+        if: runner.os == 'macOS'
+        run: >
+          cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Engine and sound quality tests
+        shell: bash
+        run: |
+          EXT=""; [ "$RUNNER_OS" = "Windows" ] && EXT=".exe"
+          ./build/ScribaPitchEngineTest_artefacts/Release/ScribaPitchEngineTest$EXT
+          ./build/ScribaPitchQualityTest_artefacts/Release/ScribaPitchQualityTest$EXT
+
+      - name: Package
+        shell: bash
+        run: |
+          A="build/ScribaPitch_artefacts/Release"
+          mkdir -p dist
+          cp -R "$A/VST3/Scriba Pitch.vst3" dist/
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            cp -R "$A/AU/Scriba Pitch.component" dist/
+            cp -R "$A/Standalone/Scriba Pitch.app" dist/
+            # ad-hoc signature so the plugins load on Apple Silicon
+            codesign --force --deep -s - "dist/Scriba Pitch.vst3"
+            codesign --force --deep -s - "dist/Scriba Pitch.component"
+            codesign --force --deep -s - "dist/Scriba Pitch.app"
+          else
+            cp "$A/Standalone/Scriba Pitch.exe" dist/
+          fi
+          cp README.md dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Scriba-Pitch-${{ matrix.name }}
+          path: dist
